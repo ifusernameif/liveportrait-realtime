@@ -74,6 +74,21 @@
 此仓库名为**LivePortrait**，包含我们论文（[LivePortrait: Efficient Portrait Animation with Stitching and Retargeting Control](https://arxiv.org/pdf/2407.03168)）的官方PyTorch实现。 我们正在积极更新和改进此仓库。如果您发现任何错误或有建议，欢迎提出问题或提交合并请求💖。
 
 ## 上手指南 🏁
+
+### 实时摄像头驱动（本分支新增）
+
+如果你想用摄像头实时驱动一张人像照片，请先看：
+
+```bash
+REALTIME_QUICKSTART_ZH.md
+```
+
+macOS 快速启动示例：
+
+```bash
+bash scripts/run_realtime_macos.sh --source /path/to/portrait.jpg --camera 0 --target-fps 15 --mirror-output
+```
+
 ### 1. 克隆代码和安装运行环境 🛠️
 
 > [!Note]

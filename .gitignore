@@ -23,6 +23,10 @@ tmp/*
 .vscode/launch.json
 **/*.DS_Store
 gradio_temp/**
+dist/
+logs/
+personal.jpg
+personal.*
 
 # Windows dependencies
 ffmpeg/

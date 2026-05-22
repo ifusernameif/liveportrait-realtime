@@ -16,3 +16,4 @@ tyro==0.8.5
 gradio==5.1.0
 pykalman==0.9.7
 pillow>=10.2.0
+requests>=2.32.0
