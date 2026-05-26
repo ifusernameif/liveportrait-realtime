@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--mirror-input", action="store_true")
     parser.add_argument("--mirror-output", action="store_true")
     parser.add_argument("--fast", action="store_true", help="use a lower-latency realtime preset")
+    parser.add_argument("--macos-preset", choices=["custom", "quality", "m4-fast", "m4-max"], help="macOS/MPS realtime preset")
     parser.add_argument("--target-fps", type=float, help="target realtime processing FPS passed to realtime_camera.py")
     parser.add_argument("--extra-arg", action="append", default=[], help="extra argument passed through to realtime_camera.py")
     parser.add_argument("--output-dir", default="dist", help="directory where the .app bundle is created")
@@ -61,20 +62,12 @@ def main() -> int:
     if args.fast:
         command.extend(
             [
-                "--camera-width",
-                "640",
-                "--camera-height",
-                "480",
-                "--camera-fps",
-                "30",
-                "--driving-crop-mode",
-                "static",
-                "--redetect-interval",
-                "240",
-                "--motion-smoothing",
-                "0.15",
+                "--macos-preset",
+                args.macos_preset or "m4-fast",
             ]
         )
+    elif args.macos_preset:
+        command.extend(["--macos-preset", args.macos_preset])
     if args.target_fps:
         command.extend(["--target-fps", str(args.target_fps), "--camera-fps", str(int(args.target_fps))])
     command.extend(args.extra_arg)

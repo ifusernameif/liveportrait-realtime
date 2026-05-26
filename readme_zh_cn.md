@@ -81,6 +81,7 @@
 
 ```bash
 REALTIME_QUICKSTART_ZH.md
+MACOS_M4_PERFORMANCE.md
 ```
 
 macOS 快速启动示例：

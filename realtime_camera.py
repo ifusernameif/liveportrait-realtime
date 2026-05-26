@@ -15,6 +15,7 @@ import os
 import platform
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +107,43 @@ def _parse_capture_source(raw: str):
 
 def _capture_backend():
     return cv2.CAP_AVFOUNDATION if platform.system() == "Darwin" else cv2.CAP_ANY
+
+
+def apply_macos_preset(args) -> None:
+    """Apply conservative macOS realtime presets before initialization."""
+    if args.macos_preset == "custom":
+        return
+
+    if args.macos_preset == "quality":
+        args.camera_width = 1280
+        args.camera_height = 720
+        args.camera_fps = 15 if args.target_fps <= 0 else int(args.target_fps)
+        args.driving_crop_mode = "landmark"
+        args.redetect_interval = 30
+        args.crop_smoothing = 0.65
+        args.motion_smoothing = 0.05
+        args.mps_warmup = max(args.mps_warmup, 2)
+    elif args.macos_preset == "m4-fast":
+        args.camera_width = 640
+        args.camera_height = 480
+        args.camera_fps = 24 if args.target_fps <= 0 else int(args.target_fps)
+        args.target_fps = 24 if args.target_fps <= 0 else args.target_fps
+        args.driving_crop_mode = "static"
+        args.redetect_interval = 240
+        args.crop_smoothing = 0.75
+        args.motion_smoothing = 0.15
+        args.mps_warmup = max(args.mps_warmup, 3)
+    elif args.macos_preset == "m4-max":
+        args.camera_width = 480
+        args.camera_height = 360
+        args.camera_fps = 30 if args.target_fps <= 0 else int(args.target_fps)
+        args.target_fps = 30 if args.target_fps <= 0 else args.target_fps
+        args.driving_crop_mode = "center"
+        args.center_crop_ratio = 0.72
+        args.redetect_interval = 999999
+        args.crop_smoothing = 0.0
+        args.motion_smoothing = 0.2
+        args.mps_warmup = max(args.mps_warmup, 4)
 
 
 def list_cameras(limit: int) -> None:
@@ -205,6 +243,45 @@ def test_camera(args) -> int:
     finally:
         cap.release()
         cv2.destroyAllWindows()
+
+
+class LatestFrameCapture:
+    """Keep only the newest camera frame so inference never works through a backlog."""
+
+    def __init__(self, cap: cv2.VideoCapture) -> None:
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.ready = threading.Event()
+        self.stopped = threading.Event()
+        self.latest = None
+        self.ok = False
+        self.thread = threading.Thread(target=self._run, name="latest-frame-capture", daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self.stopped.is_set():
+            ok, frame = self.cap.read()
+            with self.lock:
+                self.ok = ok
+                self.latest = frame if ok else None
+                if ok:
+                    self.ready.set()
+            if not ok:
+                time.sleep(0.005)
+
+    def read(self, timeout: float = 2.0):
+        if not self.ready.wait(timeout):
+            return False, None
+        with self.lock:
+            return self.ok, None if self.latest is None else self.latest.copy()
+
+    def release(self) -> None:
+        self.stopped.set()
+        self.thread.join(timeout=1.0)
+        self.cap.release()
 
 
 def ensure_weights_exist(inference_cfg: InferenceConfig, crop_cfg: CropConfig) -> None:
@@ -382,6 +459,17 @@ class RealtimePortraitAnimator:
         self.anchor_x_d_new = None
         self.motion_multiplier = 1.0
         self.prev_x_d_new = None
+
+    def warmup(self, n_iters: int) -> None:
+        if n_iters <= 0:
+            return
+        for _ in range(n_iters):
+            I_d = self.wrapper.prepare_source(self.source.crop_rgb_256)
+            self.wrapper.get_kp_info(I_d)
+            out = self.wrapper.warp_decode(self.source.f_s, self.source.x_s, self.source.x_s)
+            self.wrapper.parse_output(out["out"])
+        if self.wrapper.device == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
 
     def _kp_info_from_driving_crop(self, driving_crop_rgb_256: np.ndarray):
         I_d = self.wrapper.prepare_source(driving_crop_rgb_256)
@@ -617,6 +705,7 @@ def open_capture(args) -> cv2.VideoCapture:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.camera_height)
     if args.camera_fps > 0:
         cap.set(cv2.CAP_PROP_FPS, args.camera_fps)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
 
 
@@ -658,11 +747,21 @@ def parse_args():
     parser.add_argument("--camera-height", type=int, default=720)
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--target-fps", type=float, default=0.0, help="cap realtime processing FPS; 0 means run as fast as possible")
+    parser.add_argument(
+        "--macos-preset",
+        choices=["custom", "quality", "m4-fast", "m4-max"],
+        default="custom",
+        help="macOS/MPS realtime preset; m4-max favors throughput over tracking robustness",
+    )
+    parser.add_argument("--mps-warmup", type=int, default=0, help="warm up MPS kernels before starting realtime loop")
+    parser.add_argument("--async-capture", dest="async_capture", action="store_true", default=True, help="read camera frames on a background thread")
+    parser.add_argument("--no-async-capture", dest="async_capture", action="store_false", help="disable background camera capture")
     parser.add_argument("--mirror-input", action="store_true", help="mirror camera frames before driving")
     parser.add_argument("--mirror-output", action="store_true", help="mirror generated frames before preview/recording/virtual camera")
 
     parser.add_argument("--display", choices=["split", "generated"], default="split")
     parser.add_argument("--no-window", action="store_true", help="do not open an OpenCV preview window")
+    parser.add_argument("--max-frames", type=int, default=0, help="stop after N generated frames; useful for benchmarking")
     parser.add_argument("--output", help="optional path to record generated video")
     parser.add_argument("--output-fps", type=int, default=25)
     parser.add_argument("--virtual-camera", action="store_true", help="send generated RGB frames to pyvirtualcam")
@@ -702,6 +801,7 @@ def parse_args():
 
 def main() -> int:
     args = parse_args()
+    apply_macos_preset(args)
     if args.list_cameras:
         list_cameras(args.camera_scan_limit)
         return 0
@@ -764,13 +864,19 @@ def main() -> int:
         args.center_crop_ratio,
     )
     animator = RealtimePortraitAnimator(wrapper, source_state, inference_cfg, args.motion_smoothing)
+    if wrapper.device == "mps":
+        print("Using PyTorch MPS backend (Apple Metal) for neural inference.")
+    animator.warmup(args.mps_warmup)
 
     cap = open_capture(args)
+    capture = LatestFrameCapture(cap).start() if args.async_capture else None
     writer = None
     virtual_cam = OptionalVirtualCamera(args.virtual_camera, args.output_fps)
     frame_count = 0
+    total_generated = 0
     fps = 0.0
     fps_t0 = time.perf_counter()
+    run_t0 = None
     window_name = "LivePortrait Realtime"
 
     print("Started realtime driving. Keep a neutral frontal face for the first detected frame.")
@@ -779,7 +885,7 @@ def main() -> int:
     try:
         while True:
             loop_t0 = time.perf_counter()
-            ok, frame_bgr = cap.read()
+            ok, frame_bgr = capture.read() if capture is not None else cap.read()
             if not ok or frame_bgr is None:
                 print("No frame received from camera/video source.")
                 break
@@ -808,6 +914,9 @@ def main() -> int:
                 generated_rgb = cv2.flip(generated_rgb, 1)
             latency_ms = (time.perf_counter() - t0) * 1000.0
 
+            if run_t0 is None:
+                run_t0 = time.perf_counter()
+            total_generated += 1
             frame_count += 1
             now = time.perf_counter()
             if now - fps_t0 >= 0.5:
@@ -845,13 +954,22 @@ def main() -> int:
                 remaining = target_frame_seconds - (time.perf_counter() - loop_t0)
                 if remaining > 0:
                     time.sleep(remaining)
+            if args.max_frames > 0 and total_generated >= args.max_frames:
+                break
     finally:
-        cap.release()
+        if capture is not None:
+            capture.release()
+        else:
+            cap.release()
         if writer is not None:
             writer.release()
         virtual_cam.close()
         if not args.no_window:
             cv2.destroyAllWindows()
+
+    if run_t0 is not None and total_generated > 0:
+        elapsed = max(time.perf_counter() - run_t0, 1e-6)
+        print(f"Generated {total_generated} frames in {elapsed:.2f}s, average FPS {total_generated / elapsed:.2f}.")
 
     return 0
 

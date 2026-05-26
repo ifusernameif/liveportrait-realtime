@@ -142,6 +142,7 @@ python realtime_camera.py \
 
 - Apple Silicon：先用当前脚本验证链路，降低摄像头分辨率、关闭 `--pasteback`，只输出 `--display generated`。
 - NVIDIA GPU：更适合实时输出；后续可以把同样的摄像头裁剪和动作基准逻辑迁移到 TensorRT/FasterLivePortrait 一类实时实现。
+- macOS M4：当前实现通过 PyTorch MPS 使用 Apple Metal 后端，但不是手写 Metal/CoreML 推理引擎，30 FPS 不能保证。
 
 低延迟优先可以先试：
 
@@ -154,9 +155,7 @@ python realtime_camera.py \
   --camera-height 480 \
   --camera-fps 30 \
   --target-fps 15 \
-  --driving-crop-mode static \
-  --redetect-interval 240 \
-  --motion-smoothing 0.15
+  --macos-preset m4-fast
 ```
 
 如果通过 `.app` 启动器运行：
@@ -171,6 +170,20 @@ open dist/LivePortraitCamera.app
 ```
 
 可以把 `--target-fps 15` 换成 `12`、`18`、`24` 等自己测试。实际 FPS 达不到目标时，说明当前机器/模型推理速度不够，需要继续降分辨率、用 `static/center` 裁剪，或换 TensorRT/FasterLivePortrait 方案。
+
+M4 上冲 30 FPS 可试：
+
+```bash
+python realtime_camera.py \
+  --source personal.jpg \
+  --camera 0 \
+  --display generated \
+  --target-fps 30 \
+  --macos-preset m4-max \
+  --mirror-output
+```
+
+`m4-max` 会启用异步采集、MPS 预热、中心裁剪和较低输入分辨率。脸必须保持在画面中心，否则应退回 `m4-fast`。
 
 `--driving-crop-mode static` 只用第一帧定位脸，后面复用裁剪框；启动后请保持正脸、中性表情，画面跑起来后按 `r` 可重新校准。若脸移出裁剪框，改回默认 `landmark`，或使用 `--driving-crop-mode center --center-crop-ratio 0.7` 并让脸保持在画面中心。
 

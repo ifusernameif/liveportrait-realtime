@@ -9,6 +9,7 @@ SOURCE=""
 CAMERA="0"
 TARGET_FPS="15"
 DISPLAY="generated"
+MACOS_PRESET="m4-fast"
 MIRROR_INPUT=0
 MIRROR_OUTPUT=0
 FAST=1
@@ -25,6 +26,7 @@ Options:
   --camera VALUE        Camera index or stream URL. Default: 0.
   --target-fps VALUE    Target processing FPS. Try 12, 15, 18, 24. Default: 15.
   --display VALUE       generated or split. Default: generated.
+  --preset VALUE        custom, quality, m4-fast, or m4-max. Default: m4-fast.
   --mirror-input        Mirror camera input before driving.
   --mirror-output       Mirror generated output for preview/live use.
   --no-fast             Use the default crop settings instead of the low-latency preset.
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
       DISPLAY="${2:-generated}"
       shift 2
       ;;
+    --preset)
+      MACOS_PRESET="${2:-m4-fast}"
+      shift 2
+      ;;
     --mirror-input)
       MIRROR_INPUT=1
       shift
@@ -65,6 +71,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-fast)
       FAST=0
+      MACOS_PRESET="custom"
       shift
       ;;
     --app)
@@ -171,7 +178,7 @@ fi
 
 if [[ "$USE_APP" -eq 1 ]]; then
   app_args=(tools/create_macos_camera_app.py --source "$SOURCE" --camera "$CAMERA" --display "$DISPLAY" --target-fps "$TARGET_FPS")
-  [[ "$FAST" -eq 1 ]] && app_args+=(--fast)
+  [[ "$FAST" -eq 1 ]] && app_args+=(--fast --macos-preset "$MACOS_PRESET")
   [[ "$MIRROR_INPUT" -eq 1 ]] && app_args+=(--mirror-input)
   [[ "$MIRROR_OUTPUT" -eq 1 ]] && app_args+=(--mirror-output)
   conda run -n "$ENV_NAME" python "${app_args[@]}"
@@ -190,13 +197,7 @@ run_args=(
   --target-fps "$TARGET_FPS"
 )
 if [[ "$FAST" -eq 1 ]]; then
-  run_args+=(
-    --camera-width 640
-    --camera-height 480
-    --driving-crop-mode static
-    --redetect-interval 240
-    --motion-smoothing 0.15
-  )
+  run_args+=(--macos-preset "$MACOS_PRESET")
 fi
 [[ "$MIRROR_INPUT" -eq 1 ]] && run_args+=(--mirror-input)
 [[ "$MIRROR_OUTPUT" -eq 1 ]] && run_args+=(--mirror-output)
